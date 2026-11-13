@@ -4,6 +4,7 @@
   "description": "Valet Deck: panel de escritorio para gestionar Laravel Valet en Linux",
   "homepage": "https://github.com/LC-jhony/valet-deck",
   "author": "LC-jhony <jhonyapm94@gmail.com>",
+  "license": "MIT",
   "desktopName": "valet-deck.desktop",
   "main": "out/main/index.js",
   "scripts": {

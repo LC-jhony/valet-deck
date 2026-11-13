@@ -547,3 +547,8 @@ todo cae en `default`. Si el puerto 2525 estaba ocupado, usa el que indique la c
 
 Cancelaste el diálogo de contraseña. No es un fallo: vuelve a intentar la acción y escribe la
 contraseña en la ventana del sistema.
+
+## Licencia
+
+Valet Deck se publica bajo la licencia **MIT**. Consulta el archivo
+[`LICENSE`](LICENSE) para el texto completo.
