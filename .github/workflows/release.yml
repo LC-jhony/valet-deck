@@ -65,6 +65,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build application
+        run: npm run build
       - name: Build dmg and zip for Apple Silicon and Intel
         run: npx electron-builder --mac --x64 --arm64 --publish never
       - uses: actions/upload-artifact@v4
@@ -88,6 +90,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build application
+        run: npm run build
       - name: Build NSIS installer
         run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v4
