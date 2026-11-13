@@ -1,0 +1,30 @@
+# Dependencias y artefactos de compilación
+node_modules/
+out/
+dist/
+release/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Registros y temporales
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Variables de entorno locales
+.env
+.env.*
+!.env.example
+
+# Herramientas locales de análisis y agentes
+.rea/
+.openidea/
+.rsc/
+.rsc.json
+AGENTS.md
+opencode.json
+
+# Basura del sistema
+--help

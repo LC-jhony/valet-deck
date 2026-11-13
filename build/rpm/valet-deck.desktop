@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Valet Deck
+GenericName=Valet manager
+Comment=Panel de escritorio para Valet Linux
+Exec=/opt/ValetDeck/valetdeck %U
+Terminal=false
+Type=Application
+Icon=valet-deck
+StartupNotify=true
+StartupWMClass=Valet Deck
+Categories=Development;
+Keywords=Laravel;Valet;PHP;nginx;MariaDB;development;
