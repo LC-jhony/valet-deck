@@ -2,7 +2,7 @@
 // (lo genera electron-builder desde `build.publish`), descarga el artefacto de
 // la release de GitHub y lo instala: en .deb/.rpm pide la contraseña una vez por
 // polkit; en AppImage reemplaza el archivo. En desarrollo no se activa.
-import { app } from 'electron'
+import { Notification, app } from 'electron'
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 import type { AppUpdateState } from '../shared/types'
 
@@ -49,6 +49,17 @@ function friendly(error: unknown): string {
 }
 
 let configured = false
+/** Una sola notificación por versión y ejecución: el chequeo se repite cada 6 h. */
+let notifiedVersion = ''
+
+function notifyAvailable(version: string): void {
+  if (!version || version === notifiedVersion || !Notification.isSupported()) return
+  notifiedVersion = version
+  new Notification({
+    title: 'Valet Deck update available',
+    body: `Version ${version} is ready. Open Settings → Programs and updates to download it.`
+  }).show()
+}
 
 function configure(): void {
   if (configured || !app.isPackaged) return
@@ -65,6 +76,7 @@ function configure(): void {
   autoUpdater.on('checking-for-update', () => emit({ status: 'checking', percent: 0, message: '' }))
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     emit({ status: 'available', latest: info.version, percent: 0, message: '' })
+    notifyAvailable(info.version)
   })
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
     emit({ status: 'current', latest: info.version, percent: 0, message: '' })
@@ -81,12 +93,15 @@ function configure(): void {
 /** Consulta si hay una versión nueva. No descarga nada. */
 export async function checkAppUpdate(): Promise<AppUpdateState> {
   if (!app.isPackaged) return state
+  // Un chequeo periódico no debe borrar una descarga en curso ni una versión
+  // ya descargada y pendiente de instalar.
+  if (state.status === 'checking' || state.status === 'downloading' || state.status === 'ready') return state
   configure()
   emit({ status: 'checking', percent: 0, message: '' })
   try {
     await autoUpdater.checkForUpdates()
     // Si el feed no emitió ningún evento, al menos no se queda «checking».
-    if (state.status === 'checking') emit({ status: 'current' })
+    if (appUpdateState().status === 'checking') emit({ status: 'current' })
   } catch (error) {
     emit({ status: 'error', message: friendly(error) })
   }

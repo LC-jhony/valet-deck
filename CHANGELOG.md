@@ -4,6 +4,30 @@ Todos los cambios relevantes de Valet Deck se anotan aquí. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el versionado
 [SemVer](https://semver.org/lang/es/).
 
+## [0.1.1] — 2026-11-13
+
+### Corregido
+
+- **Abrir sitio** ya no deja una pestaña muerta. Si `~/.valet/config.json` no tiene dominio,
+  el panel lo repara con `valet domain test`, comprueba que el nombre resuelve y, cuando no hay
+  un DNS de Valet instalado, sincroniza `/etc/hosts` antes de abrir el navegador.
+- **HTTPS de Valet** deja de mostrar «La conexión no es privada». La CA local de Valet se
+  importa en el almacén NSS de Chrome/Chromium al habilitar HTTPS, al abrir un sitio seguro y
+  al cambiar el dominio.
+- El **Dashboard** comprueba el DNS real: antes mostraba el estado correcto aunque no existiera
+  ningún servicio DNS ni entradas en `/etc/hosts`.
+- **Settings** avisa cuando falta el dominio de Valet y permite guardarlo para repararlo.
+- Los vhosts de `~/.valet/Nginx` sin extensión `.conf` se leen para detectar los puertos reales
+  de nginx.
+- El diálogo de creación de proyecto deshabilita **Open site** mientras abre el navegador.
+
+### Añadido
+
+- Comprobación de actualizaciones cada 6 horas mientras la app está abierta y aviso de
+  escritorio cuando hay una versión nueva publicada.
+
+[0.1.1]: https://github.com/LC-jhony/valet-deck/releases/tag/v0.1.1
+
 ## [0.1.0] — 2026-11-13
 
 Primera publicación pública con el nombre **Valet Deck**. Instala y gestiona Laravel Valet en

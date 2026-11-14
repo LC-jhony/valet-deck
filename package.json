@@ -1,6 +1,6 @@
 {
   "name": "valet-deck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Valet Deck: panel de escritorio para gestionar Laravel Valet en Linux",
   "homepage": "https://github.com/LC-jhony/valet-deck",
   "author": "LC-jhony <jhonyapm94@gmail.com>",
