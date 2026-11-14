@@ -9,6 +9,7 @@ import type {
 import { run } from './exec'
 import { sudo } from './elevate'
 import { prepareHelpers, runValet } from './helpers'
+import { trustValetCa } from './certs'
 import { PROJECT_NAME_RE, patchEnv, projectEnvValues, validateAnswers, validateDatabase, type DatabaseConnection, type LaravelAnswers } from '../shared/laravel'
 import { cancelLaravelNew, detectLaravel, ensureLaravel, laravelCapabilities, runLaravelNew } from './laravel-installer'
 import { readMariaDbCredentials } from './mariadb-setup'
@@ -34,7 +35,7 @@ interface AppConfig {
 interface Changed { file: string; backup: string; root: boolean }
 
 /** Los nombres llegan como argumento de execFile (sin shell): solo evitamos opciones y rutas. */
-const assertName = (n: string) => {
+export const assertName = (n: string) => {
   if (typeof n !== 'string' || !n || n.trim() !== n || n === '.' || n === '..' ||
     n.startsWith('-') || /[/\\\0-\x1f\x7f]/.test(n)) throw new Error('Invalid name')
 }
@@ -62,22 +63,63 @@ export function siteUrlFor(name: string, tld: string, secure: boolean, port: num
 }
 
 // ---------------- Sitios ----------------
+const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i
+
+/**
+ * Dominio tal cual está en `config.json`, o `null` cuando falta o no es válido.
+ * Valet escribe `domain`; las configuraciones antiguas usaban `tld`.
+ */
+export function domainFromConfig(raw: unknown): string | null {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as { tld?: unknown; domain?: unknown }
+  const value = typeof c.domain === 'string' ? c.domain : c.tld
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return DOMAIN_RE.test(trimmed) ? trimmed : null
+}
+
 async function valetConfig(): Promise<{ tld: string; paths: string[] }> {
   try {
     const raw: unknown = JSON.parse(await readFile(join(VALET, 'config.json'), 'utf8'))
-    const c = (raw && typeof raw === 'object' ? raw : {}) as { tld?: unknown; domain?: unknown; paths?: unknown }
-    const rawTld = typeof c.domain === 'string' ? c.domain : c.tld
-    const tld = typeof rawTld === 'string' && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(rawTld.trim()) ? rawTld.trim() : 'test'
+    const c = (raw && typeof raw === 'object' ? raw : {}) as { paths?: unknown }
     const paths = Array.isArray(c.paths)
       ? c.paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '').map(expandHome)
       : []
-    return { tld, paths }
+    return { tld: domainFromConfig(raw) ?? 'test', paths }
   } catch { return { tld: 'test', paths: [] } }
 }
 
 /** Dominio que Valet usa para los sitios (config.json escribe "domain"). */
 export async function valetDomain(): Promise<string> {
   return (await valetConfig()).tld
+}
+
+/** Dominio configurado, sin el respaldo a `.test`, para detectar configs rotas. */
+export async function configuredValetDomain(): Promise<string | null> {
+  try {
+    return domainFromConfig(JSON.parse(await readFile(join(VALET, 'config.json'), 'utf8')))
+  } catch { return null }
+}
+
+/**
+ * Repara un `config.json` sin `domain`. Con la clave ausente Valet sirve los
+ * sitios como `nombre.` y no como `nombre.test`; `valet domain` además rehace
+ * los certificados y los `server_name` de los sitios que estaban seguros con
+ * ese dominio vacío.
+ */
+export async function ensureValetDomain(): Promise<string> {
+  const configured = await configuredValetDomain()
+  if (configured) return configured
+  await prepareHelpers()
+  // Un fallo al regenerar un certificado no debe impedir que el dominio quede
+  // guardado: lo que decide si la reparación sirvió es `config.json`.
+  await runValet(['domain', 'test'], true)
+  const repaired = await configuredValetDomain()
+  if (!repaired) {
+    throw new Error('Valet did not save its domain. Set one in Settings → Development domain.')
+  }
+  // El cambio de dominio rehace los certificados de los sitios seguros.
+  await trustValetCa()
+  return repaired
 }
 
 export async function listSites(): Promise<Site[]> {
@@ -115,6 +157,8 @@ export async function setSecure(name: string, on: boolean) {
   assertName(name)
   await prepareHelpers()
   await runValet([on ? 'secure' : 'unsecure', name])
+  // Valet solo importa el certificado del sitio; sin la CA, Chrome lo rechaza.
+  if (on) await trustValetCa()
 }
 
 /**
@@ -519,11 +563,16 @@ const isEnabled = async (service: string) => (await run('systemctl', ['is-enable
 
 async function nginxFiles(): Promise<{ file: string; root: boolean }[]> {
   const files: { file: string; root: boolean }[] = []
+  // El servidor global va primero: sus `listen` son los puertos de Valet y los
+  // de cada sitio pueden ser restos de un cambio anterior.
+  if (existsSync(NGINX_SYSTEM)) files.push({ file: NGINX_SYSTEM, root: true })
   const dir = join(VALET, 'Nginx')
   if (existsSync(dir)) {
-    for (const f of await readdir(dir)) if (f.endsWith('.conf')) files.push({ file: join(dir, f), root: false })
+    for (const f of await readdir(dir)) {
+      if (f.startsWith('.')) continue
+      files.push({ file: join(dir, f), root: false })
+    }
   }
-  if (existsSync(NGINX_SYSTEM)) files.push({ file: NGINX_SYSTEM, root: true })
   return files
 }
 

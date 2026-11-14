@@ -286,6 +286,8 @@ export interface DatabaseCredentials {
 
 export interface SystemSettings {
   domain: string
+  /** false cuando ~/.valet/config.json no tiene un `domain` válido. */
+  domainConfigured: boolean
   parkedPaths: string[]
   httpPort: number
   httpsPort: number

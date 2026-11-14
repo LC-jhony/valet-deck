@@ -19,6 +19,7 @@ import { openSecureInstallation } from './mariadb-secure'
 import { isAppUrl as isAppUrlIn } from './window-guard'
 import { createTray, destroyTray } from './tray'
 import { removeLegacyMailpit } from './legacy-mailpit'
+import { openSite } from './site-open'
 
 app.setName('Valet Deck')
 const ICON_PATH = app.isPackaged
@@ -41,7 +42,7 @@ const handlers: Record<string, (...a: any[]) => Promise<unknown>> = {
   'sites:list': v.listSites,
   'sites:secure': v.setSecure,
   'sites:remove': v.removeSite,
-  'sites:open': async (name: string) => { await shell.openExternal(await v.siteUrl(name)) },
+  'sites:open': openSite,
   'sites:project-info': v.projectInfo,
   'sites:cancel-create': v.cancelCreateProject,
   'sites:delete-incomplete': v.deleteIncompleteProject,
@@ -309,6 +310,11 @@ app.whenReady().then(async () => {
   if (ICON && !ICON.isEmpty()) void createTray(ICON, TRAY_ICONS, () => mainWindow)
   // Se consulta en segundo plano: si hay versión nueva, el panel de
   // actualizaciones la muestra al abrirse sin bloquear el arranque ni la red.
-  if (app.isPackaged) setTimeout(() => { void au.checkAppUpdate() }, 4000)
+  // La comprobación se repite cada 6 horas para una app que queda abierta.
+  if (app.isPackaged) {
+    setTimeout(() => { void au.checkAppUpdate() }, 4000)
+    const updates = setInterval(() => { void au.checkAppUpdate() }, 6 * 60 * 60 * 1000)
+    updates.unref()
+  }
 })
 app.on('window-all-closed', () => app.quit())

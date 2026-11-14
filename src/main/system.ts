@@ -9,7 +9,9 @@ import { shell } from 'electron'
 import type { DashboardInfo, SystemSettings } from '../shared/site'
 import { run } from './exec'
 import { prepareHelpers, runValet } from './helpers'
-import { listServices, listSites, phpInfo, scanPorts, valetDomain, webPortConflict } from './valet'
+import {
+  configuredValetDomain, domainFromConfig, listServices, listSites, phpInfo, scanPorts, valetDomain, webPortConflict
+} from './valet'
 import { defaultPhpVersion, installedPhpVersions } from './php-versions'
 import { nodeVersionsInfo } from './node-versions'
 import { databasesInfo } from './databases'
@@ -50,8 +52,10 @@ export async function systemSettings(): Promise<SystemSettings> {
   const paths = Array.isArray(config.paths)
     ? config.paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
     : []
+  const configuredDomain = domainFromConfig(config)
   return {
-    domain: typeof config.domain === 'string' && config.domain.trim() ? config.domain.trim() : 'test',
+    domain: configuredDomain ?? 'test',
+    domainConfigured: configuredDomain !== null,
     parkedPaths: paths,
     httpPort: validPort(app.http, 80),
     httpsPort: validPort(app.https, 443),
@@ -72,7 +76,10 @@ export async function setDomain(domain: string): Promise<SystemSettings> {
   }
   if (value.length > 63) throw new Error('The domain is too long.')
   await prepareHelpers()
-  await runValet(['domain', value])
+  // Igual que la reparación automática: el resultado válido es el que queda en
+  // `config.json`, no el código de salida de un reinicio de DNS que puede fallar.
+  await runValet(['domain', value], true)
+  if ((await configuredValetDomain()) !== value) throw new Error('Valet did not save the domain.')
   return systemSettings()
 }
 
@@ -108,6 +115,9 @@ export async function dashboardInfo(): Promise<DashboardInfo> {
   ])
   const nginx = services.find((s) => s.name === 'nginx')
   const dns = services.find((s) => /dnsmasq|valet-dns|valet-studio-dns/.test(s.name))
+  // Sin daemon, el modo es /etc/hosts: comprobar el nombre comodín es la única
+  // forma de saber si los sitios resuelven de verdad.
+  const domainReady = (await run('getent', ['hosts', `valet-studio.${domain}`], true)).includes('127.0.0.1')
   // Sin nginx instalado no hay conflicto que resolver: el problema es que falta
   // el servidor web, y el Dashboard lo dice en su bloque de estado.
   const conflict = nginx ? webPortConflict(ports) : null
@@ -125,6 +135,7 @@ export async function dashboardInfo(): Promise<DashboardInfo> {
   // nginx y PHP-FPM se muestran en el bloque de estado de Valet, no como un
   // aviso duplicado: el bloque ya dice si Valet puede servir sitios o no.
   if (dns && !dns.active) warnings.push(`${dns.name} is not running: .${domain} may not resolve.`)
+  if (!domainReady) warnings.push(`.${domain} does not resolve yet: press Repair DNS in Settings → Maintenance → Network and DNS.`)
   if (mail && !mail.running) {
     warnings.push(mail.error || 'The built-in mail catcher is not listening: apps cannot send mail to it.')
   }
@@ -167,8 +178,12 @@ export async function dashboardInfo(): Promise<DashboardInfo> {
     },
     dns: {
       mode: dns ? 'dnsmasq' : 'hosts',
-      ok: dns ? dns.active : true,
-      detail: dns ? `${dns.name} ${dns.active ? 'running' : 'stopped'}` : `Sites resolve through the hosts file (.${domain})`
+      ok: domainReady,
+      detail: dns
+        ? `${dns.name} ${dns.active ? 'running' : 'stopped'}${domainReady ? '' : ` · .${domain} does not resolve`}`
+        : domainReady
+          ? `Sites resolve through the hosts file (.${domain})`
+          : `Sites do not resolve yet: press Repair DNS in Settings → Maintenance`
     },
     warnings
   }

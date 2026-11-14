@@ -118,11 +118,17 @@ export function SettingsPage({ r, env, onAppearance, onNavigate }: {
                 <input value={domain} onChange={(e) => setDomain(e.target.value)} spellCheck={false}
                   placeholder="test" />
               </label>
-              <button className="btn primary" disabled={a.busy || !domainReady || domain.trim().toLowerCase() === s.domain}
+              <button className="btn primary" disabled={a.busy || !domainReady || (domain.trim().toLowerCase() === s.domain && s.domainConfigured)}
                 onClick={() => a.act(() => window.api.system.setDomain(domain.trim().toLowerCase()))}>
                 <Glyph name="check" size={13} />Save domain
               </button>
             </div>
+            {!s.domainConfigured && (
+              <Notice tone="warn">
+                Valet has no domain in its configuration, so sites are served as <code>name.</code>.
+                Save <code>test</code> (or another domain) to repair it; secured sites are regenerated.
+              </Notice>
+            )}
             <p className="panel-note">
               Sites are served as <code>name.{s.domain}</code>. Changing it updates Valet and rewrites
               its nginx server names. After a change, use <strong>Maintenance → Network and DNS</strong> to

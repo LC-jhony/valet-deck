@@ -1199,7 +1199,6 @@ function Shell({ settings, setSettings, mode, initialTab = 'dashboard' }: {
                     name={selectedSite}
                     onClose={() => setSelectedSite(null)}
                     onNavigate={go}
-                    onOpen={(name) => { void window.api.sites.open(name) }}
                     onSitesChanged={refreshSiteViews}
                   />
                 )

@@ -53,14 +53,14 @@ function SourceTag({ source }: { source: 'isolated' | 'default' | 'pinned' }) {
 
 // ── Overview ─────────────────────────────────────────────────────────────
 
-function OverviewTab({ detail, busy, run, onNavigate, onOpen }: {
+function OverviewTab({ detail, busy, run, onNavigate }: {
   detail: Detail
   busy: string
   run: RunFn
   onNavigate: (tab: Tab) => void
-  onOpen: (name: string) => void
 }) {
   const [domain, setDomain] = useState('')
+  const [httpsNote, setHttpsNote] = useState('')
   const extra = detail.domains.filter((d) => !d.primary)
   const domainReady = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(domain.trim().toLowerCase())
 
@@ -93,7 +93,7 @@ function OverviewTab({ detail, busy, run, onNavigate, onOpen }: {
           <span className={`tag ${detail.secure ? 'on' : ''}`}>{detail.secure ? 'HTTPS' : 'HTTP'}</span>
         </div>
         <div className="panel-actions">
-          <button className="btn primary" onClick={() => onOpen(detail.name)}>
+          <button className="btn primary" disabled={Boolean(busy)} onClick={() => void run('open', () => window.api.sites.open(detail.name))}>
             <Glyph name="globe" size={13} />Open site
           </button>
           <button className="btn" disabled={Boolean(busy)} onClick={() => void run('folder', () => window.api.sites.openFolder(detail.name))}>
@@ -101,14 +101,21 @@ function OverviewTab({ detail, busy, run, onNavigate, onOpen }: {
           </button>
           <button className="btn" disabled={Boolean(busy)}
             onClick={() => void run('https', async () => {
-              await window.api.sites.secure(detail.name, !detail.secure)
-              return window.api.sites.detail(detail.name)
+              const enabling = !detail.secure
+              await window.api.sites.secure(detail.name, enabling)
+              const next = await window.api.sites.detail(detail.name)
+              setHttpsNote(enabling
+                ? 'HTTPS enabled. If the browser warns about the certificate, quit it completely and reopen it once so it reads Valet’s local CA.'
+                : '')
+              return next
             })}>
             <Glyph name={detail.secure ? 'unlock' : 'lock'} size={13} />
             {detail.secure ? 'Disable HTTPS' : 'Enable HTTPS'}
           </button>
         </div>
       </div>
+
+      {httpsNote && <Notice tone="info">{httpsNote}</Notice>}
 
       <div className="metric-grid metric-grid-3">
         <div className="metric">
@@ -1014,11 +1021,10 @@ function LogsTab({ detail, onRefresh }: { detail: Detail; onRefresh: () => void 
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
-export function SiteDetail({ name, onClose, onNavigate, onOpen, onSitesChanged }: {
+export function SiteDetail({ name, onClose, onNavigate, onSitesChanged }: {
   name: string
   onClose: () => void
   onNavigate: (tab: Tab) => void
-  onOpen: (name: string) => void
   onSitesChanged: () => void
 }) {
   const r = useResource(() => window.api.sites.detail(name), Boolean(name))
@@ -1079,7 +1085,7 @@ export function SiteDetail({ name, onClose, onNavigate, onOpen, onSitesChanged }
             ))}
           </nav>
 
-          {tab === 'overview' && <OverviewTab detail={detail} busy={busy} run={run} onNavigate={onNavigate} onOpen={onOpen} />}
+          {tab === 'overview' && <OverviewTab detail={detail} busy={busy} run={run} onNavigate={onNavigate} />}
           {tab === 'env' && <EnvTab detail={detail} busy={busy} run={run} />}
           {tab === 'database' && <DatabaseTab detail={detail} busy={busy} run={run} onNavigate={onNavigate} />}
           {tab === 'mail' && <MailTab detail={detail} busy={busy} run={run} onNavigate={onNavigate} />}

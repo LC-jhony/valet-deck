@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PortUsage } from '../shared/types'
 import {
-  apacheTransform, cgroupOwner, conflictingPorts, nginxTransform, phpUseArgs, portFromAddress,
+  apacheTransform, cgroupOwner, conflictingPorts, domainFromConfig, nginxTransform, phpUseArgs, portFromAddress,
   siteUrlFor, webPortConflict
 } from './valet'
 
@@ -17,6 +17,22 @@ describe('URL del sitio', () => {
 
   it('rechaza nombres que el parser convierte en usuario@host', () => {
     expect(siteUrlFor('a@b', 'test', false, 80)).toBe('')
+  })
+})
+
+describe('dominio de Valet', () => {
+  it('lee domain y acepta tld como respaldo', () => {
+    expect(domainFromConfig({ domain: 'test', paths: [] })).toBe('test')
+    expect(domainFromConfig({ tld: 'local', paths: [] })).toBe('local')
+    expect(domainFromConfig({ domain: ' dev.test ' })).toBe('dev.test')
+  })
+
+  it('devuelve null cuando falta o no es un dominio válido', () => {
+    expect(domainFromConfig({ paths: [] })).toBeNull()
+    expect(domainFromConfig({ domain: '' })).toBeNull()
+    expect(domainFromConfig({ domain: 'a@b' })).toBeNull()
+    expect(domainFromConfig({ domain: 'test.' })).toBeNull()
+    expect(domainFromConfig(null)).toBeNull()
   })
 })
 

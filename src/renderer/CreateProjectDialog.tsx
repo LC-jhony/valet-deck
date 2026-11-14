@@ -250,13 +250,16 @@ export function CreateProjectDialog({ onClose, onCreated }: {
   }
 
   const openSite = async () => {
-    if (!done) return
+    if (!done || busy) return
     setError('')
+    setBusy(true)
     try {
       await window.api.sites.open(done.name)
       onClose()
     } catch (e) {
       setError(errorMessage(e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -642,7 +645,7 @@ export function CreateProjectDialog({ onClose, onCreated }: {
             {done ? (
               <>
                 <button type="button" className="btn" onClick={onClose}>Close</button>
-                <button type="button" className="btn primary" onClick={openSite} disabled={!done.url}>
+                <button type="button" className="btn primary" onClick={openSite} disabled={!done.url || busy}>
                   <Glyph name="globe" size={13} />Open site
                 </button>
               </>
