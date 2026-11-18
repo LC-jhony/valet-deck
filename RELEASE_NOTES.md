@@ -104,10 +104,11 @@ node -v && npm -v && php -v && lair doctor
 
 ## Publicación del release
 
-El repositorio se entregó preparado localmente: commits, tag anotado `v1.0.0` y estas notas. Para publicarlo cuando haya remoto y credenciales:
+Lair se publica en el repositorio existente **`LC-jhony/valet-deck`**, reemplazando el contenido anterior con un commit de reemplazo que conserva ambos historiales. La rama `main`, el tag anotado `v1.0.0` y estas notas están preparados localmente; para publicarlos con credenciales de GitHub:
 
 ```sh
-git remote add origin https://github.com/<usuario>/lair.git
-git push -u origin main --tags
-gh release create v1.0.0 --title "Lair v1.0.0" --notes-file RELEASE_NOTES.md
+cd /home/jhony/Documentos/valet-deck
+git push origin main
+git push origin v1.0.0
+gh release create v1.0.0 --repo LC-jhony/valet-deck --title "Lair v1.0.0" --notes-file RELEASE_NOTES.md
 ```
