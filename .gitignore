@@ -1,0 +1,9 @@
+# Binario generado por `make build`
+/lair
+
+# Clave privada de desarrollo: nunca se versiona ni se distribuye.
+/keys/private.ed25519
+
+# Artefactos temporales
+*.part
+*.tmp
