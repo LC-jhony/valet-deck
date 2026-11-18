@@ -1,554 +1,537 @@
-# Valet Deck
+# Lair
 
-**Valet Deck** es una aplicación de escritorio para **Linux** (Electron + React 19 + TypeScript)
-que instala y gestiona un entorno de desarrollo Laravel completo con Laravel Valet, PHP, DNS,
-servicios, bases de datos y correo local. No es un envoltorio de Flock ni cambia el runtime de
-Valet: añade una interfaz para las piezas que ya existen en el sistema y aplica las ideas de
-Flock que tienen sentido aquí.
+Entorno de desarrollo local para **PHP / Laravel nativo** (sin Docker ni VM). Un solo binario Go reúne la CLI, el daemon y el punto de entrada de los shims: compilas una vez, configuras con dos variables y usas `lair` para todo.
 
-- **Sitios** parkeados y enlazados, con ficha por sitio: `.env`, base de datos, correo, colas,
-  PHP/Node.js y registros.
-- **PHP** con apt, systemd y `valet isolate`; el repositorio se elige solo según la distro.
-- **Node.js** con nvm, versión por defecto y `.nvmrc` por sitio.
-- **Bases de datos** MariaDB, MySQL, PostgreSQL y SQLite, con guías de instalación y un bloque
-  `.env` copiable para cada motor.
-- **Correo integrado**: un catcher SMTP propio que arranca con el panel, sin instalar Mailpit
-  ni ningún servicio aparte.
-- **Servicios y puertos** con estado real, journal y detección del proceso que ocupa 80/443.
-- **Correo listo para Laravel**: escribe el bloque `MAIL_*` coherente en el `.env`.
-- **Actualizaciones** del propio panel desde GitHub Releases.
+> Estado: fases 1–4 implementadas y testeadas. Linux con `systemd-resolved` es la plataforma completa. La clave Ed25519 incluida es **de desarrollo**; no sirve para producción.
+
+---
+
+## En 30 segundos
+
+```sh
+# 1. compilar
+export PATH="$HOME/.local/go/bin:$PATH"
+cd lair && make build
+
+# 2. configurar e instalar
+export LAIR_HOME="$HOME/.local/share/lair"      # opcional: es el valor por defecto
+./lair install
+sudo "$LAIR_HOME/setup-privileged.sh"
+sudo "$LAIR_HOME/trust-ca.sh" --add
+sudo systemctl enable --now lair@$USER
+
+# 3. usar
+new shell                       # o: source ~/.bashrc
+lair php install 8.4 && lair php use 8.4
+lair node install 22 && lair node default 22
+lair services install postgres 17
+node -v && npm -v && php -v
+lair doctor                     # diagnóstico si algo no responde
+```
+
+---
 
 ## Índice
 
-- [Requisitos](#requisitos)
-- [Instalación](#instalación)
-- [Primer arranque](#primer-arranque)
-- [Secciones del panel](#secciones-del-panel)
-- [Sitios y proyectos Laravel](#sitios-y-proyectos-laravel)
-- [PHP y repositorios](#php-y-repositorios)
-- [Node.js](#nodejs)
-- [Bases de datos](#bases-de-datos)
-- [Correo integrado](#correo-integrado)
-- [DNS](#dns)
-- [Puertos y Apache](#puertos-y-apache)
-- [Servicios](#servicios)
-- [Actualizaciones](#actualizaciones)
-- [Desarrollo](#desarrollo)
-- [Arquitectura y seguridad](#arquitectura-y-seguridad)
-- [Copias, reparación y desinstalación](#copias-reparación-y-desinstalación)
-- [Solución de problemas](#solución-de-problemas)
+1. [Compilación y Makefile](#1-compilación-y-makefile)
+2. [Configuración](#2-configuración)
+3. [El comando `lair`](#3-el-comando-lair)
+4. [Flujos de trabajo](#4-flujos-de-trabajo)
+5. [Resolución de versiones](#5-resolución-de-versiones)
+6. [Estructura de datos](#6-estructura-de-datos)
+7. [Mapa de módulos](#7-mapa-de-módulos)
+8. [Daemon, DNS y HTTPS](#8-daemon-dns-y-https)
+9. [Seguridad](#9-seguridad)
+10. [Solución de problemas](#10-solución-de-problemas)
+11. [Más documentación](#11-más-documentación)
 
-## Requisitos
+---
 
-- Ubuntu 24.04 LTS, 26.04 LTS o 26.10 (probado), o una distribución con `systemd` y
-  NetworkManager. Debian, Fedora y Arch funcionan con el PHP de su distribución.
-- Polkit (`pkexec`) con agente gráfico, o `sudo` con `zenity`/`kdialog`. El panel prefiere
-  `sudo -A`: pide la contraseña una vez y la reutiliza durante la instalación; `pkexec` queda
-  como respaldo.
-- `systemd-resolved` activo para el **modo DNS seguro**. Si no lo está, usa el modo **Hosts**.
-- Node 20+ para desarrollar o empaquetar la app.
-- No hace falta instalar Valet, nginx ni Composer a mano: el **primer arranque** lo instala
-  todo con una contraseña y barras de progreso por componente. Si falta algo que el panel no
-  puede instalar, muestra el comando exacto. El mantenimiento (actualizaciones, DNS,
-  requisitos) vive en **Settings → Maintenance**.
+## 1. Compilación y Makefile
 
-> En Ubuntu 26.04 y 26.10 el panel usa el **PHP de la distribución** (8.5): sus paquetes ya
-> traen `libsodium26` y no se mezclan con Sury, cuyos paquetes exigen `libsodium23`. Si quedó
-> un repositorio de Sury de una versión anterior, se retira con copia de seguridad al
-> instalar o actualizar PHP. En las LTS 22.04 y 24.04 sigue usando el PPA de Ondřej.
+### Requisitos de compilación
 
-## Instalación
+Lo único que necesitas para **compilar** es Go 1.21+ (en este entorno: `~/.local/go`, versión 1.27.4). El módulo usa exclusivamente la biblioteca estándar: **no hay `go.mod` con dependencias externas**, no hay `go get`, no hay que descargar librerías. El usuario final no necesita Go: recibe el binario ya compilado.
 
-La versión **0.1.0** es la primera publicación de esta línea. Descarga el paquete de la última
-publicación y instálalo:
+Si Go está instalado en `~/.local/go`, añádelo al PATH de tu shell:
 
-```bash
-# AppImage: portable, sin instalar nada
-curl -fLO https://github.com/LC-jhony/valet-deck/releases/download/v0.1.0/Valet-Deck-0.1.0.AppImage
-chmod +x Valet-Deck-0.1.0.AppImage
-./Valet-Deck-0.1.0.AppImage
+```sh
+export PATH="$HOME/.local/go/bin:$PATH"
+go version        # go version go1.27.4 linux/amd64
 ```
 
-> En Ubuntu 24.04+ el AppImage necesita `libfuse2t64`. Si el sistema restringe los
-> *user namespaces*, arráncalo con `--no-sandbox`. Para uso diario se recomienda el `.deb`,
-> que configura el sandbox de Electron al instalar.
+### El Makefile
 
-```bash
-# Debian, Ubuntu y derivados
-curl -fLO https://github.com/LC-jhony/valet-deck/releases/download/v0.1.0/valet-deck_0.1.0_amd64.deb
-sudo apt install ./valet-deck_0.1.0_amd64.deb
+```makefile
+GO  ?= go
+BIN := lair
+
+all: test build
+build:      $(GO) build -o $(BIN) ./cmd/lair
+test:       $(GO) test ./...
+test-race:  $(GO) test -race ./...
+fmt:        $(GO) fmt ./...
+vet:        $(GO) vet ./...
+clean:      rm -f $(BIN)
 ```
 
-```bash
-# Fedora, RHEL y derivados
-curl -fLO https://github.com/LC-jhony/valet-deck/releases/download/v0.1.0/valet-deck-0.1.0.x86_64.rpm
-sudo dnf install ./valet-deck-0.1.0.x86_64.rpm
+| Target | Comando que ejecuta | Para qué sirve |
+|---|---|---|
+| `make build` | `go build -o lair ./cmd/lair` | Genera `./lair`: CLI + daemon + `exec` en un único ejecutable. Es el target que normalmente usarás. |
+| `make test` | `go test ./...` | Toda la suite unitaria (manifiesto, versiones, extracción segura, servicios, shims, API, DNS, PKI, web, dispatcher, bootstrap, uninstall). |
+| `make vet` | `go vet ./...` | Análisis estático; debe salir sin mensajes. |
+| `make fmt` | `go fmt ./...` | Formatea todo el código con `gofmt`. |
+| `make test-race` | `go test -race ./...` | Detecta carreras; **requiere cgo y un compilador C (`gcc`)**. Si no tienes gcc, usa `make test`. |
+| `make all` | `test` + `build` | Valida y compila de un golpe (es el target por defecto: basta con `make`). |
+| `make clean` | `rm -f lair` | Borra el binario generado. |
+
+### Personalizar la compilación
+
+Las variables se pueden sobreescribir en la línea de comandos:
+
+```sh
+make GO="$HOME/.local/go/bin/go" BIN=./lair-dev build     # ruta explícita de Go / otro nombre
+make GO=go test                                           # usar el go del PATH
+make clean build                                          # reconstruir desde cero
 ```
 
-Comprueba la descarga antes de instalar:
+Cross-compilación (el manifiesto usa claves `linux-x64`, `linux-arm64`, etc.):
 
-```bash
-curl -fsSLO https://github.com/LC-jhony/valet-deck/releases/download/v0.1.0/SHA256SUMS
-sha256sum -c SHA256SUMS
+```sh
+GOOS=linux   GOARCH=amd64 make build BIN=./lair-linux-x64
+GOOS=linux   GOARCH=arm64 make build BIN=./lair-linux-arm64
+GOOS=darwin  GOARCH=arm64 make build BIN=./lair-darwin-arm64
+CGO_ENABLED=0 make build      # binario estático; recomendado para distribuir
 ```
 
-### macOS y Windows
+Tras compilar, comprueba el binario:
 
-La release también publica paquetes para macOS y Windows. Sirven para revisar la interfaz y
-el código en esas plataformas, pero **no pueden gestionar Laravel Valet**: el panel controla
-`systemd`, `apt` y Valet Linux, que solo existen en Linux. Para trabajar con sitios y servicios,
-usa la versión de Linux.
-
-- **macOS** (Apple Silicon): `Valet-Deck-0.1.0-arm64.dmg`.
-- **macOS** (Intel): `Valet-Deck-0.1.0-x64.dmg`.
-- **Windows** (x64): `Valet-Deck-Setup-0.1.0.exe`.
-
-## Primer arranque
-
-El instalador aparece **solo cuando falta un componente requerido**: PHP 8.5 con PHP-FPM y las
-extensiones de Valet, Composer, nginx o Laravel Valet. Si ya están instalados, el panel entra
-directo aunque sea el primer arranque. La ventana **Set up Valet Deck** resume cada componente
-en una línea:
-
-- **Requeridos**: PHP 8.5 con PHP-FPM y las extensiones de Valet, Composer, nginx y Laravel
-  Valet con su Composer aislado.
-- **Opcionales**: Node.js 26 (instala nvm si hace falta) y MariaDB (la instala, arranca y
-  prepara el usuario gestionado `valet_studio`; el secure es manual).
-- **Una sola ventana de contraseña**, la del sistema.
-- **El DNS no se toca**: el setup no aplica DNS, no edita `/etc/hosts` ni reinicia
-  `systemd-resolved`. El paso DNS se marca como omitido y el resumen lo dice.
-- Antes de cambiar nada se crea una copia en `~/.valet-studio/backups`.
-- **Set up later** entra sin instalar; si siguen faltando componentes requeridos, la ventana
-  vuelve en el siguiente arranque.
-- El **correo integrado no se instala**: arranca con el panel y escucha en `127.0.0.1:2525`.
-
-Al terminar, **Valet Deck is ready** muestra las comprobaciones y el botón **Open Valet
-Studio**.
-
-## Secciones del panel
-
-La barra de actividad muestra un icono y un rótulo por sección, con tooltip y un indicador de
-la sección activa. Los contadores (avisos, sitios, versiones, bases, puertos, servicios y
-correo) aparecen como insignias; en ventanas estrechas se ocultan los rótulos.
-
-- **Dashboard**: estado de Valet, PHP, Node.js, servicios, bases de datos, correo y DNS, con
-  los avisos antes que las cifras. Cada tarjeta lleva a su sección.
-- **Sites**: sitios parkeados y enlazados. **New project** crea un Laravel; al seleccionar un
-  sitio se abre su ficha con siete pestañas.
-- **PHP**: versiones instaladas, la que sirve Valet, sitios aislados, repositorio PHP y
-  acciones de instalar, actualizar, cancelar, quitar y aislar.
-- **Node.js**: versiones de nvm, alias por defecto y fijación por sitio con `.nvmrc`.
-- **Databases**: MariaDB, MySQL, PostgreSQL y SQLite, con credenciales guardadas, creación y
-  borrado de bases, prueba de conexión y guías por motor.
-- **Services**: arranque, parada, reinicio y journal de cada unidad de systemd.
-- **Ports**: puertos de nginx y Apache, conflictos y proceso que los ocupa.
-- **Mail**: bandejas, búsqueda, detalle de mensajes, adjuntos, bloque `.env` y envío de prueba.
-- **Settings** (`Ctrl+,`): dominio, carpetas parkeadas, versiones por defecto, rutas y
-  apariencia. En **Maintenance**: actualizaciones del panel y de los componentes, requisitos,
-  modo y reparación de DNS, el secure de MariaDB y **Uninstall everything**, que retira Laravel
-  Valet, PHP, Composer, Node.js 26 de nvm y MariaDB (solo si la instaló el panel), conservando
-  sitios, copias y nginx.
-
-Atajos: `Ctrl+1`…`Ctrl+8` cambian de sección, `Ctrl+B` muestra u oculta el panel lateral y
-`Ctrl+,` abre Ajustes. Por debajo de 900 px el panel se convierte en una capa superpuesta.
-
-La **bandeja del sistema** sigue al panel en segundo plano: el icono cambia entre verde, ámbar
-y rojo según la salud de los servicios, y el menú resume el estado y lista los servicios y los
-sitios abiertos.
-
-## Sitios y proyectos Laravel
-
-**Sites → New project** crea un proyecto Laravel sin salir del panel:
-
-- Elige el **nombre** y la **carpeta** (selector nativo o ruta aparcada). Se instala la
-  última versión estable de Laravel; no acepta una restricción de versión.
-- Composer se ejecuta con el `COMPOSER_HOME` aislado en
-  `~/.config/valet-studio/composer` y muestra el registro en vivo.
-- Si eliges **MySQL** o **MariaDB**, el panel crea la base si no existe antes de ejecutar las
-  migraciones. En **PostgreSQL** lo intenta con `psql`; si no está instalado, avisa y deja la
-  base a tu cargo. Los nombres aceptan letras, números, `-` y `_`.
-- Si la carpeta es exactamente una ruta aparcada, el sitio aparece al refrescar. Si no, se
-  ejecuta `valet link <nombre>` dentro del proyecto.
-- **Stop** cancela el grupo completo del instalador (Composer, PHP y Node).
-- En modo **Hosts**, pulsa **Sync hosts** después de crear el proyecto para que el dominio
-  nuevo resuelva.
-
-La ficha del sitio incluye:
-
-1. **Overview**: framework, dominios, PHP, Node.js y extensiones.
-2. **`.env`**: edición con copia previa en `~/.valet-studio/backups`; los secretos nunca
-   vuelven a la ventana.
-3. **Database**: conexión, prueba real y escritura de `DB_*` con los datos del servidor.
-4. **Mail**: bloque `MAIL_*` listo para copiar y aplicar al `.env`.
-5. **Queues**: workers con unidades `systemctl --user` y sus registros.
-6. **PHP & Node.js**: versión de PHP, `valet isolate`, `.flockrc` (`php=8.4`), versión de Node
-   y `.nvmrc`.
-7. **Logs**: registros de Laravel y de los workers.
-
-## PHP y repositorios
-
-Valet Deck instala PHP con apt y lo sirve con PHP-FPM y systemd. No descarga binarios propios
-ni crea pools ajenos a la distribución. La página **PHP** muestra:
-
-- Versiones instaladas, parche, última disponible, tamaño en disco y extensiones.
-- La versión que sirve Valet por defecto y los sitios aislados con `valet isolate`.
-- Un botón para **instalar**, **actualizar el parche**, **cancelar** un trabajo en curso,
-  **quitar** una versión o **aislar** un sitio.
-- La etiqueta **Xdebug** cuando esa versión carga la extensión, como en Flock.
-- El pin `php=8.4` en `.flockrc`, con botones para escribir, aplicar y quitar.
-- El **repositorio PHP** que corresponde a esta máquina, su suite y si apt ya lo lee.
-
-### Qué repositorio se usa
-
-La decisión vive en `src/shared/php-repo.ts` y es pura:
-
-| Distro | Repositorio |
-| --- | --- |
-| Ubuntu 22.04 `jammy` y 24.04 `noble` | PPA de Ondřej (`ppa:ondrej/php`) |
-| Ubuntu 25.04 y 25.10 | Sury, suite más nueva publicada |
-| Ubuntu 26.04, 26.10 `stonking` y posteriores | PHP de la distribución (8.5) |
-| Ubuntu EOL o Debian/Fedora/Arch | PHP de la distribución |
-
-El PPA de Ondřej solo publica `jammy` y `noble`; por eso `add-apt-repository ppa:ondrej/php`
-falla con 404 en 26.10. Sury publica `jammy`, `noble` y `resolute`, pero **no** `stonking`, y
-sus paquetes para 26.04 exigen `libsodium23`, que 26.10 ya no publica. Por eso, desde Ubuntu
-26.04 el panel usa el PHP 8.5 de la distribución y no mezcla repositorios ajenos.
-
-La lista **PHP versions** muestra tanto las versiones instalables como las que el panel conoce
-y el repositorio configurado no publica. Estas últimas aparecen como **not available** con el
-motivo y el botón deshabilitado, en vez de desaparecer sin explicación. En Ubuntu 26.10 solo
-hay PHP 8.5: es normal que 8.1–8.4 figuren como no disponibles.
-
-El repositorio se toca **solo cuando el paquete PHP falta** en los orígenes actuales. La
-tarjeta **PHP repository** muestra los comandos equivalentes para hacerlo a mano.
-
-### Instalar o actualizar una versión
-
-La instalación ejecuta `apt-get` con los mismos tiempos e inglés que el instalador principal.
-Pide la contraseña de administrador, instala `phpX.Y-fpm` y las extensiones comunes y no toca
-las demás versiones. Una actualización instala el parche más reciente de la misma minor.
-
-**Cancelar** mata el `apt-get` en curso y repara los paquetes a medio configurar con
-`dpkg --configure -a`, de modo que el siguiente intento no hereda el bloqueo. **Remove** purga la
-versión y sus extensiones con `apt-get purge`, pero solo si no es la predeterminada, no tiene
-sitios aislados y no tiene un trabajo en curso; el motivo se muestra en la propia fila.
-
-## Node.js
-
-- Instala versiones con **nvm** (no con apt), las elimina y cambia el alias por defecto.
-- nvm se clona de su repositorio oficial en una etiqueta fijada y se verifica el commit antes
-  de ejecutarlo; no se ejecuta un instalador remoto.
-- La ficha del sitio escribe `.nvmrc` con la versión elegida.
-- La fila de actualizaciones de Node sigue siendo manual.
-
-## Bases de datos
-
-La página **Databases** detecta MariaDB, MySQL, PostgreSQL y los archivos SQLite de cada sitio.
-Cada motor muestra estado, versión, host, puerto, usuario, bases, tamaño y tablas. Las
-credenciales se guardan en `~/.valet-studio/databases.json` con permisos `0600`; la contraseña
-solo se usa desde el proceso principal y nunca vuelve a la ventana.
-
-El estado distingue **no instalado** de **instalado pero parado**. Solo aparecen tarjetas de
-los motores cuyo servidor está instalado; un MariaDB parado muestra el botón **Start MariaDB**
-y un aviso claro, no un error de conexión. MySQL y PostgreSQL ausentes se agrupan en **Other
-database engines**, con su guía de instalación, y no generan avisos falsos. Un cliente suelto
-—por ejemplo el `psql` que trae Flock en `~/.local/share/flock/bin`— no cuenta como servidor.
-
-Cada tarjeta instalada incluye **Connection settings** (host, puerto, usuario, contraseña,
-guardar y probar). Las guías de **Install and connect** tienen instrucciones para `apt`
-(Ubuntu/Debian), `dnf` (Fedora) y `pacman` (Arch), más el bloque `.env` de Laravel con los
-datos reales del servidor. La contraseña aparece como `change-me`: es un marcador, no la
-credencial guardada.
-
-### MariaDB
-
-```bash
-sudo apt-get update
-sudo apt-get install -y mariadb-server mariadb-client
-sudo systemctl enable --now mariadb
-sudo mariadb -e "SELECT VERSION();"
+```sh
+./lair help
+./lair status --json
 ```
 
-El instalador crea o comprueba el usuario gestionado `valet_studio` (en `localhost` y
-`127.0.0.1`) y guarda su contraseña en `~/.valet-studio/mariadb.json` (0600). El **secure
-installation** (usuarios anónimos, base `test`, root remoto) es manual: se abre desde la
-tarjeta **MariaDB security**.
+> Instala el binario en una ruta **estable** (por ejemplo `~/.local/bin/lair`). Los shims guardan la ruta absoluta del ejecutable con el que se generaron: si luego borras el binario temporal con el que hiciste `lair install`, los shims dejarán de funcionar. Si eso pasa, vuelve a ejecutar `lair install` con el binario definitivo.
 
-### MySQL
+---
 
-```bash
-sudo apt-get install -y mysql-server
-sudo systemctl enable --now mysql
-sudo mysql -e "SELECT VERSION();"
+## 2. Configuración
+
+### 2.1 Raíz de datos (`LAIR_HOME` / `XDG_DATA_HOME`)
+
+Todo lo que Lair gestiona vive bajo una sola raíz. La precedencia es:
+
+| Prioridad | Variable | Resultado |
+|---|---|---|
+| 1 | `LAIR_HOME` | Se usa tal cual (si es relativa, se convierte en absoluta). |
+| 2 | `XDG_DATA_HOME` | `$XDG_DATA_HOME/lair` |
+| 3 | — | `~/.local/share/lair` |
+
+```sh
+export LAIR_HOME="$HOME/.local/share/lair"     # valor por defecto; puedes omitirlo
+export LAIR_HOME="/datos/lair"                  # raíz alternativa (disco, tests, etc.)
+export XDG_DATA_HOME="$HOME/.local/share"       # equivalente estándar XDG
 ```
 
-MySQL y MariaDB comparten el puerto 3306: ejecuta solo uno salvo que cambies el puerto. En
-Arch la unidad es `mysqld`; en Ubuntu y Fedora es `mysql` o `mariadb` según el paquete.
+Comprueba la raíz que se está usando en cualquier momento:
 
-### PostgreSQL
-
-```bash
-sudo apt-get install -y postgresql postgresql-contrib php8.5-pgsql
-sudo phpenmod pdo_pgsql
-sudo systemctl enable --now postgresql
-sudo -u postgres psql -c "SELECT version();"
+```sh
+lair status    # primera línea: "Lair home: ..."
+lair doctor    # imprime home, bin, PATH y shims
 ```
 
-PHP necesita `pdo_pgsql`; después de instalar el driver, reinicia PHP-FPM:
-`sudo systemctl restart php8.5-fpm`. En una instalación nueva, las conexiones locales usan
-autenticación `peer`; crea un usuario con contraseña y usa `127.0.0.1` en `.env` para conectar
-por TCP.
+### 2.2 Configuración persistente (`config.json`)
 
-### SQLite
+`<LAIR_HOME>/config.json` (permisos `0600`) es el estado de la instalación. **En producción solo lo escribe el daemon**; la CLI lo usa directamente únicamente en modo offline/bootstrap. Las escrituras son atómicas.
 
-```bash
-sudo apt-get install -y php8.5-sqlite3
-touch database/database.sqlite
-php artisan migrate
+```json
+{
+  "version": 1,
+  "installed": {
+    "php/8.4": "N3",
+    "node/22.11.0": "N1",
+    "postgres/17.2": "N2"
+  },
+  "defaults": {
+    "php": "8.4",
+    "node": "22.11.0",
+    "postgres": "17.2"
+  },
+  "ports": { "postgres": 5432 },
+  "sites": {
+    "mi-app.test": {
+      "path": "/home/usuario/proyectos/mi-app",
+      "php": "8.4",
+      "node": "22"
+    }
+  }
+}
 ```
 
-No hay servidor, usuario ni puerto. El panel lista los archivos SQLite de los sitios, pero no
-los modifica.
+| Campo | Significado | Se modifica con |
+|---|---|---|
+| `installed` | `"<paquete>/<versión>" → build` instalado. | `lair php/node/services install` |
+| `defaults` | Versión activa de `php`, `node` y cada servicio. | `lair php use`, `lair node default`, `lair services use` |
+| `ports` | Puerto asignado a cada servicio (uno activo por puerto). | `lair services install --port N` |
+| `sites` | Sitios aparcados y sus versiones aisladas. | `lair park`, `lair link`, `lair isolate` |
 
-### `.env` de Laravel
+`config.json` no se edita a mano: usa los comandos para que el daemon mantenga el estado coherente.
 
-```dotenv
-DB_CONNECTION=mysql        # o pgsql / sqlite
-DB_HOST=127.0.0.1
-DB_PORT=3306               # 5432 en PostgreSQL
-DB_DATABASE=my_app
-DB_USERNAME=valet_studio
-DB_PASSWORD=change-me
+### 2.3 Configuración por proyecto (`.lairrc`)
+
+`.lairrc` es un archivo de **texto versionable** que fija versiones para un proyecto. Se escribe con `lair pin` y lo lee el shim antes de elegir versión:
+
+```ini
+# .lairrc
+php=8.4
+node=22
 ```
 
-En SQLite solo hacen falta `DB_CONNECTION=sqlite` y `DB_DATABASE` con la ruta absoluta al
-archivo.
-
-## Correo integrado
-
-El panel trae su propio servidor SMTP de recepción: **no hay que instalar Mailpit ni ningún
-servicio aparte**. El catcher arranca con el panel y escucha solo en `127.0.0.1:2525`; si ese
-puerto está ocupado, prueba `2526`–`2529`. Si el puerto antiguo `1025` está libre, también lo
-atiende para que los `.env` existentes sigan funcionando.
-
-Si detecta el servicio Mailpit de una compilación interna anterior, el panel lo detiene y lo
-retira en el primer arranque y conserva sus mensajes en `~/.valet-studio/mailpit`; el correo
-nuevo ya cae en `~/.valet-studio/mail`.
-
-- **Bandejas por usuario SMTP**: `MAIL_USERNAME` elige el buzón. Los mensajes de cada proyecto
-  quedan separados. Sin usuario, con `MAIL_USERNAME=null` o con una cadena vacía, el mensaje
-  cae en la bandeja **`default`**; no se pierde.
-- **Credenciales**: el catcher acepta **cualquier usuario y cualquier contraseña**. La
-  contraseña no se comprueba: el panel escribe `MAIL_PASSWORD=null` y el cliente SMTP puede
-  enviar lo que tenga guardado. El usuario solo decide la bandeja.
-- **Recepción sin TLS** en loopback y un máximo de **25 MB** por mensaje, adjuntos incluidos.
-- **Mensajes en disco** como `.eml` bajo `~/.valet-studio/mail/<bandeja>/`; la pestaña los
-  lista del más nuevo al más antiguo, permite buscar, borrar uno o vaciar una bandeja y abrir
-  la carpeta.
-- **Detalle con HTML, texto, crudo y cabeceras**: el HTML se muestra en un iframe aislado, sin
-  scripts ni formularios, y los enlaces se abren en el navegador. Los adjuntos se guardan con
-  el diálogo del sistema.
-- **Integración con Laravel**: la ficha del sitio escribe el bloque `MAIL_*` en el `.env` (con
-  copia previa) y la página de Correo muestra el bloque listo para copiar. Al cambiar el
-  cifrado se escriben siempre los dos pares coherentes: `MAIL_SCHEME=null` +
-  `MAIL_ENCRYPTION=null`, `smtp` + `tls` o `smtps` + `ssl`.
-- **Prueba desde la interfaz**: el formulario envía un mensaje a la bandeja indicada y confirma
-  que apareció en disco.
-
-Bloque que escribe el panel:
-
-```dotenv
-MAIL_MAILER=smtp
-MAIL_HOST=127.0.0.1
-MAIL_PORT=2525
-MAIL_USERNAME="${APP_NAME}"
-MAIL_PASSWORD=null
-MAIL_SCHEME=null
+```sh
+lair pin php 8.4
+lair pin node 22
+git add .lairrc && git commit -m "Fijar versiones de Lair"
 ```
 
-`MAIL_USERNAME="${APP_NAME}"` es solo el ejemplo: el nombre que pongas se normaliza y se usa
-como bandeja. Para compartir una sola bandeja entre proyectos, deja `MAIL_USERNAME=null` y todo
-caerá en `default`. La contraseña no se valida: cualquier valor funciona y el panel escribe
-`null` para que quede claro que el catcher no la usa.
+> **Compatibilidad:** los proyectos que todavía tengan `.flockrc` (nombre del diseño original) siguen funcionando: se lee como alternativa, tiene menos prioridad que `.lairrc`, y el primer `lair pin` migra su contenido al archivo nuevo sin borrar el antiguo. Lo mismo ocurre con el marcador `flock.json` de instalaciones PHP antiguas, que ahora se escribe como `lair.json`.
 
-## DNS
+También se respetan `.nvmrc` y `.node-version` para Node (en ese orden, después de `.lairrc`). Los alias ambiguos como `lts/*` o `node` se ignoran deliberadamente. Para fijar una versión solo en un sitio aparcado, sin versionarla, usa `lair isolate php 8.3` (o `lair isolate php --off` para quitarla).
 
-- **Seguro (recomendado)**: `dnsmasq` escucha solo en `127.0.0.1:5354` y `systemd-resolved`
-  recibe una ruta `~test` en `/etc/systemd/resolved.conf.d/valet-studio.conf`. No se detiene
-  NetworkManager, no se reescribe `/etc/resolv.conf` y no se desactiva `systemd-resolved`. El
-  puerto 5354 se eligió para no chocar con mDNS/Avahi (5353).
-- **Hosts**: no hay daemon DNS. La app sincroniza un bloque gestionado en `/etc/hosts` con los
-  sitios de Valet. Úsalo si `systemd-resolved` no está activo o si algo ocupa 5354. Tras
-  enlazar un sitio desde la terminal, pulsa **Sync hosts**.
-- **Clásico**: deja que Valet instale su propio DNS. Puede detener `systemd-resolved`,
-  reescribir `/etc/resolv.conf`, tocar NetworkManager y cortar Wi-Fi/DNS. Solo para diagnóstico
-  avanzado; el modo seguro es el valor por defecto.
+### 2.4 Variables de entorno
 
-Antes de cualquier cambio de red se guarda una copia en
-`~/.valet-studio/backups/<fecha>/dns`. El instalador comprueba que `*.test` resuelva y que el
-DNS general siga funcionando; si falla, retira su configuración y reinicia `systemd-resolved`.
+| Variable | Uso |
+|---|---|
+| `LAIR_HOME` | Raíz de datos (ver 2.1). |
+| `XDG_DATA_HOME` | Base alternativa (`$XDG_DATA_HOME/lair`). |
+| `LAIR_MANIFEST_BASE_URLS` | Mirrors del catálogo firmado separados por comas; se prueban en orden. La confianza es de la firma, no del host. |
+| `LAIR_COMPOSER_DOWNLOAD_URL` | URL alternativa de `composer.phar` (se sigue verificando el SHA-256). |
+| `LAIR_COMPOSER_CHECKSUM_URL` | URL alternativa del `.sha256` de Composer. |
 
-## Puertos y Apache
+Las dos últimas son útiles en entornos cerrados o con mirror interno:
 
-La pestaña **Ports** permite cambiar HTTP/HTTPS de Valet (nginx) y de Apache:
-
-- Comprueba que el puerto esté libre y avisa si lo ocupa otro proceso.
-- Valida con `nginx -t` o `apache2ctl configtest`, guarda copias y restaura si la recarga falla.
-- Si Apache ocupa 80/443 puedes moverlo a 8080/8443 o detenerlo desde la tarjeta, sin
-  deshabilitar dnsmasq ni tocar la configuración de red.
-- No se permite usar 53, 67, 68, 123, 5353 ni 5354 para nginx.
-
-Cuando nginx o PHP-FPM están instalados pero detenidos, el Dashboard lo dice en un bloque
-**Valet is stopped** o **Valet is partially running** y ofrece el botón para arrancarlos. Si
-otro servicio ocupa 80/443, el bloque nombra al dueño real —por ejemplo
-`Flock (flock@jhony.service)`— detectado por el cgroup del socket, no un genérico «otro
-usuario».
-
-Como nginx y Flock no pueden escuchar a la vez en los mismos puertos, el bloque ofrece
-**Stop Flock and start nginx**. La acción pide confirmación, para la unidad detectada y arranca
-nginx; la casilla **Keep it off at boot** también la deshabilita al arranque para que no vuelva
-a tomar los puertos tras reiniciar. El panel nunca mata un proceso por su nombre: solo actúa
-sobre una unidad que está escuchando de verdad en los puertos de Valet.
-
-## Servicios
-
-La página **Services** lista las unidades de systemd relacionadas con el entorno (nginx,
-PHP-FPM, MariaDB, DNS, etc.) y permite arrancar, parar, reiniciar y ver el journal. Las
-acciones elevadas usan el mismo diálogo de contraseña que el instalador.
-
-## Actualizaciones
-
-El panel se actualiza por sí mismo desde sus releases de GitHub. En
-**Settings → Maintenance → Valet Deck** hay tres acciones: **Check now** consulta la última
-versión, **Download** baja el paquete y **Restart and install** lo aplica y reabre la app.
-
-- El `.deb` y el `.rpm` piden la contraseña una vez con el diálogo de polkit (`pkexec`). Si el
-  sistema no tiene polkit, descarga e instala el paquete a mano.
-- El AppImage se reemplaza a sí mismo; debe estar en una carpeta escribible.
-- La descarga se verifica con el `sha512` publicado en `latest-linux.yml` antes de instalar.
-
-La 0.1.0 ya incluye el actualizador: las siguientes versiones se instalan desde
-**Settings → Maintenance → Valet Deck**.
-
-## Desarrollo
-
-```bash
-npm install
-npm run dev        # desarrollo con recarga
-npm test           # pruebas unitarias (Vitest)
-npm run typecheck  # TypeScript sin emitir
-npm run build      # compila out/
-npm run dist       # typecheck + tests + AppImage + .deb + .rpm en dist/
-npm run dist:rpm   # solo el .rpm (usa rpmbuild)
-npm run dist:mac   # .dmg y .zip para macOS (requiere macOS)
-npm run dist:win   # instalador NSIS para Windows (requiere Windows o Wine)
-npm run release    # compila Linux, prepara notas, SHA256SUMS y latest-linux.yml
+```sh
+export LAIR_MANIFEST_BASE_URLS="https://cdn.lair.sh/stable,https://mirror.interno/lair/stable"
+export LAIR_COMPOSER_DOWNLOAD_URL="https://mirror.interno/composer.phar"
+export LAIR_COMPOSER_CHECKSUM_URL="https://mirror.interno/composer.phar.sha256"
+lair update && lair install
 ```
 
-El flujo de `.github/workflows/release.yml` compila Linux, macOS y Windows en runners nativos
-cuando se empuja una etiqueta `v*`. La release se crea con todos los artefactos adjuntos.
+### 2.5 PATH y perfiles de shell
 
-## Arquitectura y seguridad
+`lair install` escribe un bloque delimitado por `# >>> lair >>>` / `# <<< lair <<<` en:
 
-- `src/main`: proceso principal. Ejecuta comandos con `execFile` y arrays de argumentos (sin
-  shell), salvo los guiones elevados que se validan antes. Los paquetes, copias y DNS usan
-  `sudo -A` (una sola contraseña) o `pkexec` como respaldo; Valet usa su propio `sudo` con
-  `askpass`.
-- `src/preload`: API mínima expuesta con `contextBridge` (`window.api`).
-- `src/shared`: contratos y lógica pura (planes, versiones, PHP, correo, guías de bases de
-  datos, `.env`). Se puede probar sin tocar el sistema.
-- `src/renderer`: interfaz React con el tema Carbón y sus tokens. El correo es una vista
-  propia, sin web embebida.
-- Las contraseñas de MariaDB, bases de datos y correo nunca viajan al renderer. Los archivos
-  de credenciales se escriben con permisos `0600` y de forma atómica.
-- El Composer global no se toca. Para ver el Valet que gestiona Valet Deck:
-  `~/.config/valet-studio/composer/vendor/bin/valet --version`.
+- `~/.bashrc` y `~/.zshrc` (guarda `[ -d "$bin" ]` para no contaminar PATH si se borra la raíz);
+- `~/.config/fish/conf.d/lair.fish`;
+- `~/.config/environment.d/lair.conf`.
 
-## Copias, reparación y desinstalación
+Es idempotente y reversible: `lair uninstall` elimina exactamente esos bloques y respeta cualquier otra edición tuya. Para aplicarlo sin reiniciar:
 
-> La carpeta interna `~/.valet-studio` conserva ese nombre histórico. Se mantiene para que
-> actualizar no pierda el Composer aislado, las copias ni el correo guardado.
-
-- Cada instalación guarda copias de `/etc/nginx`, `/etc/php`, `/etc/apache2`, DNS,
-  `/etc/hosts` y `/usr/local/bin/valet` en `~/.valet-studio/backups`.
-- **Repair DNS** vuelve a aplicar el modo elegido sin reinstalar Valet.
-- **Uninstall** ejecuta `valet uninstall` (sin `--force`) con la protección DNS, elimina el
-  servicio DNS de Valet Deck y quita el paquete del Composer aislado. No desinstala un Valet
-  externo detectado fuera del Composer de Valet Deck.
-- **Uninstall everything** (Settings → Maintenance) deja la máquina limpia: quita Valet, el
-  servicio DNS, el Composer aislado, PHP de la versión gestionada, Composer del sistema,
-  Node.js 26 de nvm y MariaDB solo si consta que la instaló el panel. Los sitios, las copias y
-  nginx se conservan; el siguiente arranque abre el instalador con lo que falte.
-- Si instalaste el modo **clásico**, revisa después los restos de DNS de Valet
-  (`/etc/dnsmasq.d/valet`, `/opt/valet-linux`, `/etc/NetworkManager/conf.d/valet.conf`).
-- Si un paso falla, corrige la causa y vuelve a ejecutar el primer arranque (o pulsa
-  **Repair installation** si conservas esa pantalla). Los pasos ya completados se omiten o se
-  repiten sin duplicar configuración.
-- El `postrm` del paquete detiene los servicios del panel, deshace el DNS y el bloque de
-  `/etc/hosts`, retira los ayudantes de root y borra los datos del usuario. MariaDB solo se
-  purga si consta que la instaló el panel.
-
-## Solución de problemas
-
-### «nginx is stopped» o «php8.5-fpm is installed but stopped»
-
-El aviso solo aparece si el servicio **existe** y está detenido. Arráncalo desde **Services**:
-
-```bash
-sudo systemctl start nginx php8.5-fpm
+```sh
+source ~/.bashrc     # bash
+source ~/.zshrc      # zsh
 ```
 
-Si nginx no arranca, revisa `sudo nginx -t` y el journal con
-`journalctl -u nginx -n 50 --no-pager`. Si el aviso dice que otro proceso ocupa el puerto, la
-tarjeta **Ports** muestra cuál es y permite mover nginx o Apache.
+Si `node -v` no se reconoce, ejecuta `lair doctor`: te dirá si falta el PATH y te imprimirá el `export PATH="..."` exacto.
 
-### Los puertos 80/443 están ocupados por Flock
+### 2.6 Scripts privilegiados (configuración del sistema)
 
-Es normal si Flock está activo. El panel lo detecta por el cgroup del socket y lo muestra como
-`Flock (flock@<usuario>.service)` en el bloque de estado de Valet. Desde ahí puedes pulsar
-**Stop Flock and start nginx**; si marcas **Keep it off at boot**, Flock tampoco volverá a
-tomar los puertos al reiniciar. A mano, el equivalente es:
+`lair install` genera tres scripts que **tú debes revisar y ejecutar una vez**; Lair nunca los lanza automáticamente:
 
-```bash
-sudo systemctl stop flock@$USER.service
-sudo systemctl disable flock@$USER.service   # solo si no lo quieres al arranque
-sudo systemctl start nginx
+| Script | Se ejecuta con | Qué configura |
+|---|---|---|
+| `<LAIR_HOME>/setup-privileged.sh` | `sudo` | Unidad `lair@<usuario>.service`, regla polkit y drop-in de `systemd-resolved` (`DNS=127.0.0.1#53535`, `Domains=~test`). |
+| `<LAIR_HOME>/trust-ca.sh --add` | `sudo` | CA local en el store del sistema. |
+| `<LAIR_HOME>/trust-ca-user.sh --add` | tu usuario | CA en Firefox/Chromium (requiere `certutil`). |
+
+```sh
+sudo "$LAIR_HOME/setup-privileged.sh"
+sudo "$LAIR_HOME/trust-ca.sh" --add
+"$LAIR_HOME/trust-ca-user.sh" --add
+sudo systemctl enable --now lair@$USER
 ```
 
-### PHP no aparece en Ubuntu 26.10
+`lair uninstall` genera `revert-privileged.sh` (y conserva los helpers con `--remove`) para deshacer todo. Con `--delete-data`, los scripts de reversión se guardan en `$HOME` para que no desaparezcan al borrar la raíz.
 
-Ubuntu 26.10 (`stonking`) solo publica **PHP 8.5**. El PPA de Ondřej y Sury no tienen paquetes
-para esa suite, así que la página **PHP → PHP versions** muestra 8.1–8.4 como **not available**
-con el motivo, y deja instalable solo lo que el repositorio ofrece. No hace falta añadir Sury:
-la tarjeta **PHP repository** debe decir **Distribution PHP**. Para comprobarlo a mano:
+---
 
-```bash
-apt-cache policy php8.5-cli
-apt-cache search --names-only '^php[0-9]+\.[0-9]+-fpm$'
+## 3. El comando `lair`
+
+El binario es la **única** entrada: `lair <comando> [subcomando] [args] [flags]`. Si el daemon está activo, la CLI habla con él por un socket unix; si no, usa el mismo motor en proceso (modo offline). No hay dos implementaciones de la lógica.
+
+### 3.1 Instalación y diagnóstico
+
+| Comando | Descripción |
+|---|---|
+| `lair install` | Bootstrap local (shims, PATH, CA, Composer verificado) y generación de los scripts privilegiados. |
+| `lair uninstall [--delete-data]` | Revierte perfiles/shims y genera la reversión. Los datos se conservan salvo `--delete-data`. |
+| `lair status [--json]` | Muestra home, estado del daemon, PHP, Node, servicios, puertos, sitios y jobs. `--json` para scripts. |
+| `lair doctor` | Comprueba PATH, shims y versiones; imprime cómo arreglarlo. **Primer comando si algo no responde.** |
+| `lair restart` | Reinicia todos los servicios supervisados activos. |
+| `lair update` | Fuerza el refresco del catálogo firmado. |
+| `lair logs [nombre]` | Muestra un log (`postgres`, `node-22-install`, ...) o lista los disponibles si no hay argumento. |
+| `lair help` | Ayuda en pantalla. |
+
+### 3.2 PHP
+
+| Comando | Descripción |
+|---|---|
+| `lair php list` | Versiones instaladas; `*` marca la default. |
+| `lair php install [versión]` | Instala una línea minor (`8.4`) o versión exacta. Sin versión, instala la más reciente del catálogo. |
+| `lair php use <minor>` | Cambia la default global. |
+
+```sh
+lair php install 8.3
+lair php install 8.4 && lair php use 8.4
+php -v && composer -V
 ```
 
-### El correo de Laravel no llega
+### 3.3 Node
 
-Comprueba que el panel está abierto (el catcher vive dentro de la app), que el `.env` apunta a
-`127.0.0.1:2525` y que `MAIL_USERNAME` no lleva caracteres raros. La página **Mail** muestra el
-puerto real, la tarjeta de credenciales y el bloque `.env` listo para copiar. Recuerda: cualquier
-contraseña vale y `MAIL_PASSWORD=null` es lo esperado; el usuario elige la bandeja y sin usuario
-todo cae en `default`. Si el puerto 2525 estaba ocupado, usa el que indique la cabecera.
+| Comando | Descripción |
+|---|---|
+| `lair node list` | Versiones instaladas; `*` marca la default. |
+| `lair node install [versión]` | Instala `22`, `22.11.0` o la última. Regenera los shims al terminar. |
+| `lair node default <versión>` | Fija la default (acepta major, p. ej. `22`). |
 
-### Una base de datos no conecta
+```sh
+lair node install 22 && lair node default 22
+node -v && npm -v && npx --version
+```
 
-- MariaDB/MySQL: comprueba el puerto 3306 y que el usuario exista para `localhost` y
-  `127.0.0.1`. El secure installation es manual.
-- PostgreSQL: instala `php8.5-pgsql`, reinicia PHP-FPM y usa `127.0.0.1` en `.env` si la
-  autenticación local es `peer`.
-- SQLite: la ruta de `DB_DATABASE` debe ser absoluta y el archivo debe existir.
+> Si `node -v` falla justo después de instalar, es un problema de PATH/shims, no de la instalación. Ver [solución](#10-solución-de-problemas).
 
-### «Operation cancelled»
+### 3.4 Servicios
 
-Cancelaste el diálogo de contraseña. No es un fallo: vuelve a intentar la acción y escribe la
-contraseña en la ventana del sistema.
+Forma general: `lair services <acción> <id> [versión] [flags]`.
 
-## Licencia
+| Acción | Ejemplo | Descripción |
+|---|---|---|
+| `list` (o sin acción) | `lair services list` | Estado de todos los servicios. |
+| `install` | `lair services install postgres 17 --port 5432` | Descarga e inicializa; no cambia la activa si ya hay una. |
+| `use` | `lair services use postgres 17.2` | Cambia la versión activa conservando los datos. |
+| `update` | `lair services update postgres` | Instala la última, activa y reinicia. |
+| `uninstall` | `lair services uninstall postgres 17.2 --delete-data` | Elimina la instalación; sin `--delete-data` conserva los datos. |
+| `create-db` | `lair services create-db postgres laravel` | Crea una base de datos. |
+| `restart` / `stop` | `lair services restart postgres` | Controla el supervisor. |
 
-Valet Deck se publica bajo la licencia **MIT**. Consulta el archivo
-[`LICENSE`](LICENSE) para el texto completo.
+IDs disponibles: `postgres`, `mysql`, `mariadb`, `mongodb`, `redis`, `valkey`, `meilisearch`, `typesense`, `rustfs`.
+
+Los clientes (`psql`, `mysql`, `redis-cli`, `mongosh`, ...) también son shims e inyectan automáticamente host, puerto y usuario del servicio activo:
+
+```sh
+lair services install postgres 17
+lair services create-db postgres laravel
+psql -d laravel            # apunta a 127.0.0.1:5432 sin configurar nada
+```
+
+### 3.5 Sitios y HTTPS
+
+| Comando | Descripción |
+|---|---|
+| `lair park` | Registra el directorio actual como `<nombre>.test`. |
+| `lair link <nombre> [ruta]` | Registra un sitio con host explícito (por defecto, el directorio actual). |
+| `lair unlink <nombre>` | Quita el sitio del router sin borrar sus archivos. |
+| `lair secure [nombre]` | Emite certificado para el sitio y su wildcard con la CA local. Sin nombre, detecta el sitio del directorio actual. |
+| `lair isolate php\|node <versión\|--off>` | Fija o quita una versión solo para ese sitio (config.json, prioridad máxima). |
+
+```sh
+cd ~/proyectos/mi-app
+lair park                  # https://mi-app.test
+lair secure mi-app.test
+lair isolate php 8.3       # este sitio usa 8.3 aunque la default sea 8.4
+lair isolate php --off
+```
+
+### 3.6 Pines de proyecto
+
+```sh
+lair pin php 8.4           # escribe php=8.4 en .lairrc del directorio actual
+lair pin node 22           # añade node=22
+```
+
+### 3.7 Daemon
+
+```sh
+lair daemon --foreground   # primer plano, para desarrollo
+```
+
+Flags: `--no-web`, `--no-dns`, `--no-api`, `--dns-port`, `--http-port`, `--https-port`, `--domain`. Sin `--foreground`, implica que el daemon lo gestiona systemd (`lair@<usuario>.service`).
+
+```sh
+lair daemon --foreground --no-web --no-dns
+```
+
+### 3.8 `exec` (interno, no lo llames a mano)
+
+Cada shim contiene `exec "<lair>" exec <tool> "$@"`. El subcomando oculto `exec` resuelve la versión para el directorio actual y usa `execve`, sin proceso intermediario. Si falta la versión y hay TTY, ofrece instalarla; desde un script, falla con un mensaje claro. Es la pieza que hace que `node`, `php` y `psql` "simplemente funcionen".
+
+---
+
+## 4. Flujos de trabajo
+
+### 4.1 Proyecto Laravel nuevo
+
+```sh
+make build
+./lair install
+sudo "$LAIR_HOME/setup-privileged.sh"
+sudo "$LAIR_HOME/trust-ca.sh" --add
+sudo systemctl enable --now lair@$USER
+
+lair php install 8.4 && lair php use 8.4
+lair node install 22 && lair node default 22
+lair services install postgres 17
+lair services create-db postgres laravel
+
+cd ~/proyectos/mi-app
+lair pin php 8.4 && lair pin node 22
+lair park && lair secure mi-app.test
+
+php -v && composer -V && node -v && npm -v
+lair doctor
+```
+
+### 4.2 Dos proyectos con PHP distinto
+
+```sh
+cd ~/proyectos/legacy && lair pin php 8.1 && php -v   # 8.1
+cd ~/proyectos/nuevo  && lair pin php 8.4 && php -v   # 8.4
+```
+
+### 4.3 Cambiar de versión de base de datos sin perder datos
+
+```sh
+lair services install postgres 18      # instala, no activa
+lair services use postgres 18          # activa; los datos se conservan
+lair services restart postgres
+```
+
+### 4.4 Instalación sin red
+
+```sh
+lair install                  # crea shims y PATH; Composer avisa pero no aborta
+lair status                   # las versiones ya instaladas siguen funcionando
+lair doctor                   # verifica que PATH y shims estén bien
+```
+
+---
+
+## 5. Resolución de versiones
+
+El shim elige versión con esta precedencia (de mayor a menor prioridad):
+
+| Herramienta | Orden |
+|---|---|
+| PHP | `isolate` (sitio) → `.lairrc` (`php=`, antes `.flockrc`) → default global → última instalada |
+| Node | `isolate` → `.lairrc` (`node=`, antes `.flockrc`) → `.nvmrc` → `.node-version` → default global → última instalada |
+| Servicios | `defaults[id]` del `config.json` (una versión activa por puerto) |
+
+`version.ExactOrLatest` acepta `22` (última de la major), `22.11.0` (exacta o última de la major) y `8.4` (última de la minor).
+
+---
+
+## 6. Estructura de datos
+
+```
+<LAIR_HOME>/
+├── bin/                     shims ejecutables (0755) y binario lair
+├── tools/                   composer.phar verificado
+├── php/<minor>/             bin/, sbin/php-fpm, etc/php.ini, etc/pool.d/, run/, lair.json
+├── node/<version>/bin/      node, npm, npx
+├── node/global/<major>/     prefijo global de npm por major
+├── services/<id>/<version>-build<N>/    binarios
+├── services/<id>/data/<línea>/          datos (postgres usa el major)
+├── log/                     logs de instalación y servicios
+├── run/                     sockets unix y token de la API (0700)
+├── certs/                   CA, clave (0600) y certificados por sitio
+├── cache/binaries/          caché de artifacts
+├── config.json              estado persistente (solo daemon)
+├── setup-privileged.sh / trust-ca.sh / trust-ca-user.sh / revert-privileged.sh
+```
+
+---
+
+## 7. Mapa de módulos
+
+La lógica compartida está en `internal/engine`; el daemon y la CLI son dos frentes del mismo motor. Detalle completo en [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+| Paquete | Responsabilidad | API principal |
+|---|---|---|
+| `cmd/lair` | Único `main`: CLI, daemon y `exec`. | `main()` |
+| `app` | Rutas e identidad. | `Resolve()`, `Platform()` |
+| `assets` | Clave pública y logos embebidos (`go:embed`). | `PublicKey()` |
+| `version` | Parser semver y resolución. | `Parse`, `ExactOrLatest` |
+| `manifest` | Catálogo firmado, serial, caché 6 h, `OnChange`. | `Catalog.Refresh/Subscribe`, `Verify` |
+| `download` + `installer` | Descarga `.part`, SHA-256, `safeJoin`, jobs. | `Manager.Start`, `Job.Status/Cancel` |
+| `config` | Store atómico de `config.json`. | `Store.Update/View` |
+| `php` | Versiones paralelas, php.ini, FPM, Xdebug. | `EnsureINI`, `WriteFPM`, `Env` |
+| `composer` | Phar verificado por SHA-256. | `Installer.Ensure`, `Command` |
+| `node` | Builds oficiales, resolución, prefijo npm. | `ResolveVersion`, `Env` |
+| `shims` | Wrappers y perfiles reversibles. | `Generate`, `EnsureProfiles` |
+| `services` | Specs puros, datos, puertos. | `Build`, `DataPath`, `CheckPort` |
+| `supervisor` | Backoff, logs, grupos de procesos. | `Supervisor.Run/Update` |
+| `platform` | systemd, polkit, resolved, CA, plan privilegiado. | `BuildPlan`, `InstallTrust` |
+| `dns` / `pki` / `fastcgi` / `web` | `*.test`, TLS local, FPM, router HTTP. | `Server`, `IssueSite`, `Router.Match` |
+| `daemon` | API unix+token y protocolo de acciones. | `Server`, `Client`, `Dispatcher`, `Runtime` |
+| `engine` | Orquestación compartida. | `InstallPHP/Node/Service`, `Status`, `ResolveTool`, `Bootstrap` |
+| `cli` | Comandos, modo offline, `exec`, `doctor`. | `Run`, `runExec` |
+
+---
+
+## 8. Daemon, DNS y HTTPS
+
+```
+mi-app.test
+  → systemd-resolved (Domains=~test)
+  → DNS Lair 127.0.0.1:53535 → 127.0.0.1
+  → web.Server 80/443 (TLS con la CA local)
+  → Router.Match(Host)
+  → estáticos en public/   OR   FastCGI → socket de PHP-FPM
+```
+
+| Componente | Dirección |
+|---|---|
+| API local | `run/api.sock` + `run/api.token` (`0600`) |
+| DNS `*.test` | `127.0.0.1:53535` |
+| HTTP / HTTPS | `127.0.0.1:80` / `127.0.0.1:443` |
+
+El daemon no corre como root: usa `CAP_NET_BIND_SERVICE` y `NoNewPrivileges=yes`. Los servicios se ejecutan como el usuario y solo escuchan en loopback.
+
+---
+
+## 9. Seguridad
+
+- La confianza de los binarios depende **solo de la firma Ed25519** embebida, nunca del mirror.
+- Descarga a `.part` + SHA-256 en streaming + `safeJoin`; builds *yanked* rechazados y reemplazados automáticamente.
+- `run/` es `0700`, el token de la API `0600` y se compara en tiempo constante.
+- `certs/ca-key.pem` permite emitir certificados válidos en **todo el sistema** si la CA está instalada: trátalo como secreto.
+- Los scripts privilegiados no se ejecutan automáticamente; el usuario los revisa y los lanza con `sudo`.
+- No hay sandbox: los servicios son procesos normales del usuario. Detalle en [`docs/SECURITY.md`](docs/SECURITY.md).
+
+---
+
+## 10. Solución de problemas
+
+| Síntoma | Causa | Solución |
+|---|---|---|
+| `node: command not found` tras `lair node install` | Shims/PATH no configurados. | `lair doctor` → si faltan, `lair install` → abrir terminal nueva o `source ~/.bashrc`. |
+| `npm` usa otro Node | Otra versión antes en PATH. | `echo $PATH`: `<LAIR_HOME>/bin` debe ir primero. |
+| `lair install` tarda mucho | Composer sin red. | Ya no bloquea: crea los shims primero y avisa. Reintenta con red. |
+| Shims apuntan a un binario borrado | `lair install` se hizo con un binario temporal. | Instala `lair` en ruta estable y vuelve a ejecutar `lair install`. |
+| `permission denied` en 80/443 | Falta la unidad o hay conflicto de puerto. | Ejecuta `setup-privileged.sh`; prueba `lair daemon --foreground` para ver el aviso. |
+| `*.test` no resuelve | Drop-in de resolved no aplicado. | `sudo "$LAIR_HOME/setup-privileged.sh"` y `resolvectl status | grep ~test`. |
+| Certificado no confiable | Falta confianza en navegador. | `"$LAIR_HOME/trust-ca-user.sh" --add` y reinicia el navegador. |
+| `no catalog loaded` | Sin caché y sin red. | `lair update` con red; lo ya instalado sigue funcionando offline. |
+| `make test-race` falla | Falta `gcc`/cgo. | Usa `make test`. |
+
+---
+
+## 11. Más documentación
+
+- [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — changelog detallado de la versión `v1.0.0`.
+- [`docs/CLI.md`](docs/CLI.md) — referencia completa de comandos y variables de entorno.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — interfaces y flujos internos.
+- [`docs/PHASES.md`](docs/PHASES.md) — decisiones por fase de implementación.
+- [`docs/SECURITY.md`](docs/SECURITY.md) — nota de riesgos y superficie privilegiada.
+
+Logos: `assets/logo-dark.svg` (contenedor negro, L roja degradada) y `assets/logo-light.svg` (contenedor blanco, L negra), con copias embebidas en `internal/assets/` para `go:embed`.
